@@ -17,11 +17,9 @@ namespace Microsoft.Framework.PackageManager
     public class WrapCommand
     {
         public string CsProjectPath { get; set; }
-        public string ToolsPath { get; set; }
         public string Configuration { get; set; }
         public Reports Reports { get; set; }
 
-        private static readonly string CsprojDumperName = "CsprojDumper.exe";
         private static readonly string WrapperProjectVersion = "1.0.0-*";
         private static readonly char PathSeparator = '/';
 
@@ -44,49 +42,12 @@ namespace Microsoft.Framework.PackageManager
                 Configuration = "debug";
             }
 
-            if (string.IsNullOrEmpty(ToolsPath))
-            {
-                Reports.Error.WriteLine("Please specify path to tools folder".Red());
-                return false;
-            }
-
-            var dumperPath = Path.Combine(ToolsPath, CsprojDumperName);
-            if (!File.Exists(dumperPath))
-            {
-                Reports.Error.WriteLine("'{0}' doesn't exist".Red(), dumperPath);
-                return false;
-            }
-
             CsProjectPath = Path.GetFullPath(CsProjectPath);
 
-            var properties = new[]
-            {
-                "/p:Configuration=" + Configuration,
-                "/p:DesignTimeBuild=true",
-                "/p:BuildProjectReferences=false",
-                "/p:_ResolveReferenceDependencies=true" // Dump entire assembly reference closure
-            };
+            var rootDir = ProjectResolver.ResolveRootDirectory(Path.GetDirectoryName(CsProjectPath));
+            var wrapRoot = Path.Combine(rootDir, "wrap");
 
-            var startInfo = new ProcessStartInfo()
-            {
-                UseShellExecute = false,
-                FileName = dumperPath,
-                Arguments = string.Format("\"{0}\" {1}",
-                    CsProjectPath, string.Join(" ", properties)),
-                RedirectStandardOutput = true
-            };
-
-            var process = Process.Start(startInfo);
-            var stdOut = process.StandardOutput.ReadToEnd();
-            process.WaitForExit();
-
-            if (process.ExitCode != 0)
-            {
-                Reports.Error.WriteLine("'{0}' failed to dump metadata from '{1}'".Red(), dumperPath, CsProjectPath);
-                return false;
-            }
-
-            var xDoc = XDocument.Parse(stdOut);
+            var xDoc = ResolveReferences();
 
             foreach (var projectElement in xDoc.Root.Elements())
             {
@@ -94,6 +55,11 @@ namespace Microsoft.Framework.PackageManager
             }
 
             return true;
+        }
+
+        private XDocument ResolveReferences()
+        {
+            throw new NotImplementedException();
         }
 
         private static void AddWrapFolderToGlobalJson(string rootDir)

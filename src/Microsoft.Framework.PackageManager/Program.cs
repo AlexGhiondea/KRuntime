@@ -34,7 +34,6 @@ namespace Microsoft.Framework.PackageManager
             app.Name = "kpm";
 
             var optionVerbose = app.Option("-v|--verbose", "Show verbose output", CommandOptionType.NoValue);
-            var optionToolsPath = app.Option("--tools-path", "", CommandOptionType.SingleValue);
             app.HelpOption("-?|-h|--help");
             app.VersionOption("--version", GetVersion());
 
@@ -275,7 +274,6 @@ namespace Microsoft.Framework.PackageManager
                         var command = new WrapCommand();
                         command.Reports = reports;
                         command.CsProjectPath = argPath.Value;
-                        command.ToolsPath = optionToolsPath.Value();
                         command.Configuration = optConfiguration.Value();
 
                         var success = command.ExecuteCommand();
