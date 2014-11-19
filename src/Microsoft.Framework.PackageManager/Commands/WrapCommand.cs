@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.Versioning;
 using System.Xml.Linq;
 using Microsoft.Framework.Runtime;
@@ -16,12 +17,15 @@ namespace Microsoft.Framework.PackageManager
 {
     public class WrapCommand
     {
-        public string CsProjectPath { get; set; }
-        public string Configuration { get; set; }
-        public Reports Reports { get; set; }
-
+        private string _referenceResolverPath;
+        private static readonly string ReferenceResolverFileName = "ReferenceResolver.xml";
         private static readonly string WrapperProjectVersion = "1.0.0-*";
         private static readonly char PathSeparator = '/';
+
+        public string CsProjectPath { get; set; }
+        public string Configuration { get; set; }
+        public string MsBuildPath { get; set; }
+        public Reports Reports { get; set; }
 
         public bool ExecuteCommand()
         {
@@ -43,11 +47,13 @@ namespace Microsoft.Framework.PackageManager
             }
 
             CsProjectPath = Path.GetFullPath(CsProjectPath);
-
-            var rootDir = ProjectResolver.ResolveRootDirectory(Path.GetDirectoryName(CsProjectPath));
-            var wrapRoot = Path.Combine(rootDir, "wrap");
+            MsBuildPath = string.IsNullOrEmpty(MsBuildPath) ? GetDefaultMSBuildPath() : MsBuildPath;
 
             var xDoc = ResolveReferences();
+            if (xDoc == null)
+            {
+                return false;
+            }
 
             foreach (var projectElement in xDoc.Root.Elements())
             {
@@ -59,7 +65,93 @@ namespace Microsoft.Framework.PackageManager
 
         private XDocument ResolveReferences()
         {
-            throw new NotImplementedException();
+            if (!File.Exists(MsBuildPath))
+            {
+                Reports.Error.WriteLine(string.Format("Unable to locate {0}".Red().Bold(), MsBuildPath));
+                return null;
+            }
+
+            // Put ReferenceResolver.xml into a temporary dir
+            var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(tempDir);
+            _referenceResolverPath = Path.Combine(tempDir, ReferenceResolverFileName);
+            var assembly = typeof(WrapCommand).GetTypeInfo().Assembly;
+            var embeddedResourceName = "compiler/resources/" + ReferenceResolverFileName;
+            using (var stream = assembly.GetManifestResourceStream(embeddedResourceName))
+            {
+                File.WriteAllText(_referenceResolverPath, stream.ReadToEnd());
+            }
+
+            var xDoc = new XDocument();
+            xDoc.Add(new XElement("root"));
+            var projectFiles = new List<string> { CsProjectPath };
+            var intermediateResultFile = Path.Combine(tempDir, Path.GetRandomFileName());
+
+            for (var i = 0; i != projectFiles.Count; i++)
+            {
+                var properties = new[]
+                {
+                    "/p:CustomAfterMicrosoftCommonTargets=\"\{_referenceResolverPath}\"",
+                    "/p:ResultFilePath=\"\{intermediateResultFile}\"",
+                    "/p:Configuration=\{Configuration}",
+                    "/p:DesignTimeBuild=true",
+                    "/p:BuildProjectReferences=false",
+                    "/p:_ResolveReferenceDependencies=true" // Dump entire assembly reference closure
+                };
+
+                var startInfo = new ProcessStartInfo()
+                {
+                    WorkingDirectory = Path.GetDirectoryName(projectFiles[i]),
+                    UseShellExecute = false,
+                    FileName = MsBuildPath,
+                    Arguments = string.Format("\"{0}\" /t:ResolveAndDump {1}",
+                        projectFiles[i], string.Join(" ", properties)),
+                    RedirectStandardOutput = true
+                };
+
+                var process = Process.Start(startInfo);
+                var stdOut = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+
+                var projectXDoc = XDocument.Parse(File.ReadAllText(intermediateResultFile));
+                projectXDoc.Root.SetAttributeValue("buildResult", process.ExitCode == 0);
+
+                foreach (var item in GetItemsByType(projectXDoc.Root, type: "ProjectReference"))
+                {
+                    var relativePath = item.Attribute("evaluated").Value;
+                    var fullPath = PathUtility.GetAbsolutePath(projectFiles[i], relativePath);
+                    if (!projectFiles.Contains(fullPath))
+                    {
+                        projectFiles.Add(fullPath);
+                    }
+                }
+
+                xDoc.Root.Add(projectXDoc.Root);
+            }
+
+            FileOperationUtils.DeleteFolder(tempDir);
+
+            return xDoc;
+        }
+
+        private string GetDefaultMSBuildPath()
+        {
+#if ASPNET50
+            var programFilesPath = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+#else
+            var programFilesPath = Environment.GetEnvironmentVariable("PROGRAMFILES(X86)");
+#endif
+            // On 32-bit Windows
+            if (string.IsNullOrEmpty(programFilesPath))
+            {
+#if ASPNET50
+                programFilesPath = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+#else
+                programFilesPath = Environment.GetEnvironmentVariable("PROGRAMFILES");
+#endif
+            }
+
+            return Path.Combine(programFilesPath, "MSBuild", "14.0", "Bin", "MSBuild.exe");
         }
 
         private static void AddWrapFolderToGlobalJson(string rootDir)
@@ -153,7 +245,7 @@ namespace Microsoft.Framework.PackageManager
 
             // Create wrapper projects for assembly references
             // and add wrapper projects as project references
-            foreach(var itemElement in GetItemsByType(projectElement, type: "ReferencePath"))
+            foreach (var itemElement in GetItemsByType(projectElement, type: "ReferencePath"))
             {
                 if (IsAssemblyFromProjectReference(itemElement)||
                     IsFrameworkAssembly(itemElement) ||
@@ -189,7 +281,7 @@ namespace Microsoft.Framework.PackageManager
             return string.Empty;
         }
 
-        private string GetReferenceProjectOutputName(XElement projectElement, string referenceProjectName)
+        private static string GetReferenceProjectOutputName(XElement projectElement, string referenceProjectName)
         {
             foreach (var itemElement in GetItemsByType(projectElement, "ReferencePath"))
             {

@@ -265,6 +265,9 @@ namespace Microsoft.Framework.PackageManager
                     var argPath = c.Argument("[path]", "Path to csproj to be wrapped");
                     var optConfiguration = c.Option("--configuration <CONFIGURATION>",
                         "Configuration of wrapped project, default is 'debug'", CommandOptionType.SingleValue);
+                    var optMsBuildPath = c.Option("--msbuild <PATH>",
+                        @"Path to MSBuild, default is '%ProgramFiles%\MSBuild\14.0\Bin\MSBuild.exe'",
+                        CommandOptionType.SingleValue);
                     c.HelpOption("-?|-h|--help");
 
                     c.OnExecute(() =>
@@ -275,6 +278,7 @@ namespace Microsoft.Framework.PackageManager
                         command.Reports = reports;
                         command.CsProjectPath = argPath.Value;
                         command.Configuration = optConfiguration.Value();
+                        command.MsBuildPath = optMsBuildPath.Value();
 
                         var success = command.ExecuteCommand();
 
